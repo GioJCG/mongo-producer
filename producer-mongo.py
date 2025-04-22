@@ -1,80 +1,101 @@
-from flask import Flask, jsonify, request
 from confluent_kafka import Producer
+from flask import Flask, jsonify
+from dotenv import load_dotenv
+from datetime import datetime
 import requests
 import logging
 import json
-from datetime import datetime
+import os
+
+app = Flask(__name__)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-app = Flask(__name__)
+TOPIC = "movies_mongo"
 
-PRODUCER_CONF = {
+JSONL_URL = "https://raw.githubusercontent.com/GioJCG/spark_movies/refs/heads/master/results/movies_without_desc/data.jsonl"
+
+producer_conf = {
     'bootstrap.servers': 'cvqocn6qn6pkj5g2nf5g.any.us-west-2.mpx.prd.cloud.redpanda.com:9092',
     'security.protocol': 'SASL_SSL',
     'sasl.mechanism': 'SCRAM-SHA-256',
     'sasl.username': 'GioJCG',
-    'sasl.password': 'FEovgbUIbtjaaCsV2tSzbvyRYZbBPh',
+    'sasl.password': 'FEovgbUIbtjaaCsV2tSzbvyRYZbBPh'
 }
-producer = Producer(PRODUCER_CONF)
 
-TOPIC = "movies_mongo"  
-
-JSONL_URL = "https://raw.githubusercontent.com/GioJCG/spark_movies/refs/heads/master/results/movies_without_desc/data.jsonl"
+producer = Producer(producer_conf)
 
 def delivery_report(err, msg):
     if err:
-        logging.error(f"Error al enviar mensaje: {err}")
+        logging.error(f'Error al enviar: {err}')
     else:
-        logging.info(f"Mensaje enviado a {msg.topic()}")
+        logging.info(f'Enviado al tópico {msg.topic()}: {msg.value().decode("utf-8")}')
 
-def create_mongo_document(movie_data):
-    """Crea un documento básico para MongoDB con solo el título"""
-    return {
-        'title': movie_data.get('title', ''),
-    }
-
-@app.route('/send-movies', methods=['POST'])
-def send_movies():
+def transform_for_mongodb(data):
     try:
-        logging.info(f"Descargando datos desde: {JSONL_URL}")
-        response = requests.get(JSONL_URL)
-        response.raise_for_status()
+        return {
+            'title': data['title'],
+        }
+    except Exception as e:
+        logging.warning(f"Error transformando datos: {e}")
+        return None
 
-        lines = response.text.strip().splitlines()
-        logging.info(f"Total de registros a enviar: {len(lines)}")
+def fetch_and_send_data():
+    response = requests.get(JSONL_URL)
+    response.raise_for_status()
 
-        for line in lines:
-            try:
-                movie_data = json.loads(line)
-                mongo_doc = create_mongo_document(movie_data)
+    records = response.text.strip().splitlines()
+    logging.info(f"Registros recibidos: {len(records)}")
+
+    success, failed = 0, 0
+
+    for line in records:
+        try:
+            data = json.loads(line)
+            message = transform_for_mongodb(data)
+
+            if message:
                 producer.produce(
-                    TOPIC, 
-                    json.dumps(mongo_doc).encode('utf-8'), 
+                    topic=TOPIC,
+                    value=json.dumps(message, default=str).encode('utf-8'),
                     callback=delivery_report
                 )
-            except json.JSONDecodeError:
-                logging.warning(f"Línea inválida omitida: {line}")
-                continue
+                success += 1
+            else:
+                failed += 1
+        except Exception as e:
+            logging.warning(f"Error procesando línea: {e}")
+            failed += 1
 
-        producer.flush()
-        logging.info("Todos los datos fueron enviados correctamente.")
+    producer.flush()
+    return success, failed, len(records)
+
+@app.route('/send-movies', methods=['POST'])
+def send_area_stats():
+    try:
+        success, failed, total = fetch_and_send_data()
+        logging.info(f"Éxitos: {success} | Fallos: {failed}")
 
         return jsonify({
-            "status": "success", 
-            "message": f"Todos los datos fueron enviados al tópico '{TOPIC}'"
+            "status": "success",
+            "message": f"Datos enviados al tópico '{TOPIC}'",
+            "stats": {
+                "total": total,
+                "success": success,
+                "failed": failed
+            }
         }), 200
 
     except Exception as e:
-        logging.error(f"Error al enviar los datos: {e}", exc_info=True)
+        logging.error(f"Error general: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/health')
-def health_check():
-    return "ok", 200
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy"}), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
