@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
-COPY producer.py .
+COPY producer-mongo.py .
 
 EXPOSE 8080
 
