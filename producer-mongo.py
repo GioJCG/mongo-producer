@@ -21,7 +21,7 @@ PRODUCER_CONF = {
 }
 producer = Producer(PRODUCER_CONF)
 
-TOPIC = "movies_mongo"  # Cambiado el nombre del tópico
+TOPIC = "movies_mongo"  
 
 JSONL_URL = "https://raw.githubusercontent.com/GioJCG/spark_movies/refs/heads/master/results/movies_without_desc/data.jsonl"
 
@@ -34,9 +34,7 @@ def delivery_report(err, msg):
 def create_mongo_document(movie_data):
     """Crea un documento básico para MongoDB con solo el título"""
     return {
-        '_id': f"movie_{movie_data.get('title', 'unknown').lower().replace(' ', '_')}",
         'title': movie_data.get('title', ''),
-        'created_at': datetime.utcnow().isoformat()
     }
 
 @app.route('/send-movies', methods=['POST'])
